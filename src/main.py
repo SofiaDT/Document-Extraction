@@ -68,6 +68,12 @@ def parse_args() -> argparse.Namespace:
         help="Path to the output JSON file.",
     )
     parser.add_argument(
+        "--out-md",
+        dest="output_md",
+        default=None,
+        help="Path to the output Markdown file. Defaults to the JSON path with .md extension.",
+    )
+    parser.add_argument(
         "--no-schema",
         action="store_true",
         help="Extract all text without enforcing the fixed insurance schema.",
@@ -75,10 +81,35 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _format_markdown_value(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, (dict, list)):
+        text = json.dumps(value, ensure_ascii=False)
+    else:
+        text = str(value)
+    return text.replace("|", "\\|").replace("\n", "<br>")
+
+
+def format_markdown(result: dict) -> str:
+    document_type = result.get("document_type", "")
+    fields = result.get("fields", {})
+
+    lines = ["# Document Extraction", "", f"- document_type: {_format_markdown_value(document_type)}", "", "## Fields", "", "| key | value |", "| --- | --- |"]
+
+    if isinstance(fields, dict):
+        for key, value in fields.items():
+            lines.append(f"| {key} | {_format_markdown_value(value)} |")
+
+    lines.append("")
+    return "\n".join(lines)
+
+
 def main() -> None:
     args = parse_args()
     input_file = get_input_file()
     output_json = Path(args.output_json)
+    output_md = Path(args.output_md) if args.output_md else output_json.with_suffix(".md")
 
     if not input_file.exists():
         raise FileNotFoundError(f"Input file not found: {input_file}")
@@ -94,6 +125,10 @@ def main() -> None:
     output_json.parent.mkdir(parents=True, exist_ok=True)
     output_json.write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8")
     print(f"Saved: {output_json}")
+
+    output_md.parent.mkdir(parents=True, exist_ok=True)
+    output_md.write_text(format_markdown(result), encoding="utf-8")
+    print(f"Saved: {output_md}")
 
 
 if __name__ == "__main__":

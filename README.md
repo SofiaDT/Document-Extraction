@@ -20,6 +20,16 @@ OPENAI_MODEL=gpt-4.1
 mkdir -p data/input data/output
 ```
 
+4. Uncomment the data folder rule in `.gitignore` so `data/` is included:
+
+```bash
+# Change this:
+# data/
+
+# To this:
+data/
+```
+
 ## Run
 Run with any input/output file:
 
@@ -30,28 +40,37 @@ python -m src.main data/input/any_filename.jpg --out data/output/any_output.json
 python -m src.main data/input/any_filename.png --out data/output/any_output.json
 ```
 
+This will also write a Markdown summary next to the JSON (same name, .md extension). You can override it:
+
+```bash
+python -m src.main data/input/any_filename.pdf --out data/output/any_output.json --out-md data/output/any_output.md
+```
+
 Or run with auto-detection (automatically finds the first file in `data/input/`):
 
 ```bash
 python -m src.main
+python -m src.main --no-schema
 ```
 
 ### Extraction Modes
 
-**With Schema (default)** - Enforces the fixed insurance invoice schema with all required fields:
+**With Schema (default)** - Enforces one of these document schemas:
+
+- pay_stub: employee_name, pay_period, gross_pay, net_pay
+- bank_statement: bank_name, account_number, balance
+- investment_statement: investment_year, total_investment, changes_in_value
+
 ```bash
 python -m src.main data/input/document.pdf
 ```
 
-Output will always have this structure:
+Output will always have this structure (numeric fields are numbers):
 ```json
 {
-  "document_type": "insurance_invoice",
+  "document_type": "pay_stub | bank_statement | investment_statement",
   "fields": {
-    "insurance_company": "...",
-    "invoice_number": "...",
-    "balance_due_company": "...",
-    ...
+    "...": "..."
   }
 }
 ```

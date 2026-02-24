@@ -25,5 +25,5 @@ venv/
 .idea/
 
 # Data artifacts
-data/input/*
-data/output/*
+#data/input/*
+#data/output/*

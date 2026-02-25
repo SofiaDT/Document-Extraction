@@ -15,9 +15,10 @@ REQUIRED_FIELDS_BY_TYPE = {
         "balance",
     ],
     "investment_statement": [
+        "customer_name",
         "investment_year",
-        "total_investment",
-        "changes_in_value",
+        "beginning_value",
+        "ending_value",
     ],
 }
 

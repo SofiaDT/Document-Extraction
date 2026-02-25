@@ -53,13 +53,34 @@ python -m src.main
 python -m src.main --no-schema
 ```
 
+## Streamlit App
+Run the UI for batch processing a folder with schema selection:
+
+1. Start the Streamlit server:
+```bash
+streamlit run app.py
+```
+
+2. The app will open in your browser (usually `http://localhost:8501`).
+
+3. **Document Selection Tab:**
+   - Enter the path to a folder containing your documents (e.g., `data/input`)
+   - Check/uncheck "Use schema" to enforce schema validation or extract freely
+   - Click **Begin Extraction** to process all supported files (.pdf, .jpg, .jpeg, .png)
+
+4. **Results Tab:**
+   - View JSON, Markdown, and raw extracted text for each processed document
+   - Files are automatically saved to `data/output/`
+
+5. Click **Reset** anytime to clear all results and start over.
+
 ### Extraction Modes
 
 **With Schema (default)** - Enforces one of these document schemas:
 
 - pay_stub: employee_name, pay_period, gross_pay, net_pay
 - bank_statement: bank_name, account_number, balance
-- investment_statement: investment_year, total_investment, changes_in_value
+- investment_statement: customer_name, investment_year, beginning_value, ending_value
 
 ```bash
 python -m src.main data/input/document.pdf

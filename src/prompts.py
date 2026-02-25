@@ -25,6 +25,9 @@ pay_stub
   "net_pay": "number"
 }
 
+Field aliases for pay_stub (look for these alternative names):
+- net_pay: "net", "amount payable", "take home", "final salary", "net pay this period"
+
 bank_statement
 {
   "bank_name": "string",
@@ -34,10 +37,14 @@ bank_statement
 
 investment_statement
 {
+  "customer_name": "string",
   "investment_year": "string",
-  "total_investment": "number",
-  "changes_in_value": "number"
+  "beginning_value": "number",
+  "ending_value": "number"
 }
+
+Field aliases for investment_statement (look for these alternative names):
+- customer_name: "investor name", "account holder", "account owner", "investor", "name"
 
 Rules:
 - Use exact field names as specified

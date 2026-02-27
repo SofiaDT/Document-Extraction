@@ -31,74 +31,112 @@ data/
 ```
 
 ## Run
-Run with any input/output file:
+Auto-detects the first supported file (PDF, JPG, PNG) in `data/input/` and outputs JSON + Markdown to `data/output/`:
 
 ```bash
-# Works with any filename and supported format (PDF, JPG, PNG)
-python -m src.main data/input/any_filename.pdf --out data/output/any_output.json
-python -m src.main data/input/any_filename.jpg --out data/output/any_output.json
-python -m src.main data/input/any_filename.png --out data/output/any_output.json
-```
-
-This will also write a Markdown summary next to the JSON (same name, .md extension). You can override it:
-
-```bash
-python -m src.main data/input/any_filename.pdf --out data/output/any_output.json --out-md data/output/any_output.md
-```
-
-Or run with auto-detection (automatically finds the first file in `data/input/`):
-
-```bash
+# Extract with schema (default)
 python -m src.main
+
+# Extract without schema enforcement
 python -m src.main --no-schema
+
+# Custom output paths (optional)
+python -m src.main --out data/output/custom.json --out-md data/output/custom.md
 ```
 
-## Streamlit App
-Run the UI for batch processing a folder with schema selection:
+## Streamlit Apps
 
-1. Start the Streamlit server:
+### 1. Document Extraction App
+Batch process documents with OCR and LLM extraction:
+
 ```bash
 streamlit run app.py
 ```
 
-2. The app will open in your browser (usually `http://localhost:8501`).
+**Features:**
+- **Document Selection**: Upload a folder path (e.g., `data/input`) with PDFs/images
+- **Schema Toggle**: Enforce structured output or extract freely
+- **Results Tabs:**
+  - **Markdown**: Extracted fields with OCR confidence scores
+  - **JSON**: Structured output  
+  - **Raw OCR Output**: All detected text with confidence scores
+  - **OCR Visualization**: Bounding boxes and confidence overlaid on images
+- Auto-saves results to `data/output/`
 
-3. **Document Selection Tab:**
-   - Enter the path to a folder containing your documents (e.g., `data/input`)
-   - Check/uncheck "Use schema" to enforce schema validation or extract freely
-   - Click **Begin Extraction** to process all supported files (.pdf, .jpg, .jpeg, .png)
-
-4. **Results Tab:**
-   - View JSON, Markdown, and raw extracted text for each processed document
-   - Files are automatically saved to `data/output/`
-
-5. Click **Reset** anytime to clear all results and start over.
-
-### Extraction Modes
-
-**With Schema (default)** - Enforces one of these document schemas:
-
-- pay_stub: employee_name, pay_period, gross_pay, net_pay
-- bank_statement: bank_name, account_number, balance
-- investment_statement: customer_name, investment_year, beginning_value, ending_value
+### 2. Loan Qualification Checker App
+Assess borrower eligibility using financial documents:
 
 ```bash
-python -m src.main data/input/document.pdf
+streamlit run loan_checker.py
 ```
 
-Output will always have this structure (numeric fields are numbers):
-```json
-{
-  "document_type": "pay_stub | bank_statement | investment_statement",
-  "fields": {
-    "...": "..."
-  }
-}
-```
+**Features:**
+- Upload 3 financial documents: pay stub, bank statement, investment statement
+- Calculate 3 approval metrics:
+  1. **Payment-to-Income Ratio** - Monthly Payment / Net Income
+  2. **Disposable Income** - Income - (Expenses + Monthly Payment)
+  3. **Liquidity vs Payment** - Liquid Assets / Monthly Payment
+- Get overall qualification assessment (Likely to Qualify / Conditional Approval / High Risk)
 
-**Without Schema** - Extracts all text/fields freely without enforcing the fixed schema:
+### 3. RAG Search Interface
+Query your indexed documents by semantic meaning:
+
 ```bash
-python -m src.main data/input/document.pdf --no-schema
+streamlit run RAG/search.py
 ```
 
-This mode extracts any field it finds and returns them dynamically.
+**Features:**
+- **Build Index**: Select documents and create FAISS vector index
+- **Semantic Search**: Find documents by meaning (e.g., "receipts from Walmart")
+- **Filters**: Search by document type with relevance scoring
+- **Chat Q&A**: Ask questions and get answers grounded in your documents
+- **Source Citations**: See which documents contributed to each answer
+
+### Extraction Modes (CLI)
+
+**With Schema (default)** - Enforces structured output for: pay_stub, bank_statement, investment_statement, receipt
+```bash
+python -m src.main
+```
+
+**Without Schema** - Extracts all detected fields freely:
+```bash
+python -m src.main --no-schema
+```
+
+## RAG Storage for Downstream Processing
+
+The system supports storing extracted documents in a **RAG (Retrieval Augmented Generation)** vector store for semantic search and intelligent document retrieval.
+
+### What is RAG?
+
+RAG enables you to:
+- **Semantic Search**: Find documents by meaning, not just keywords
+- **Metadata Filtering**: Filter by document type, confidence scores, dates, etc.
+- **Downstream Processing**: Build analytics pipelines and AI workflows
+- **Context Retrieval**: Get relevant chunks with surrounding context
+
+### Quick Start
+
+#### 1. Index Documents
+After extracting documents with `app.py`:
+```bash
+python -m rag_indexing.build_index
+```
+
+This reads JSON from `data/output/` and builds a FAISS index in `faiss_index/` (uses `vectordb_client.py`).
+
+#### 2. Search Documents
+Open the RAG Search app to query your index:
+```bash
+streamlit run RAG/search.py
+```
+
+#### 3. Example Usage
+
+For programmatic usage examples, see:
+- [examples/example_rag_usage.py](examples/example_rag_usage.py) - Search patterns and filtering
+
+
+
+

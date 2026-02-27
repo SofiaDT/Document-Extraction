@@ -25,5 +25,16 @@ venv/
 .idea/
 
 # Data artifacts
-#data/input/*
-#data/output/*
+data/input/*
+data/output/*
+data/vectorstore/
+
+# Generated indexes (regeneratable)
+faiss_index/
+
+# Streamlit
+.streamlit/
+
+# Large model files
+*.pt
+*.bin

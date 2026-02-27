@@ -12,13 +12,24 @@ REQUIRED_FIELDS_BY_TYPE = {
     "bank_statement": [
         "bank_name",
         "account_number",
-        "balance",
+        "opening_balance",
+        "closing_balance",
     ],
     "investment_statement": [
         "customer_name",
         "investment_year",
         "beginning_value",
         "ending_value",
+    ],
+    "receipt": [
+        "merchant_name",
+        "transaction_date",
+        "currency",
+        "total_amount",
+        "tax_amount",
+        "receipt_number",
+        "payment_method",
+        "items",
     ],
 }
 

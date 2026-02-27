@@ -8,10 +8,11 @@ Valid document_type values:
 - pay_stub
 - bank_statement
 - investment_statement
+- receipt
 
 JSON shape:
 {
-  "document_type": "pay_stub | bank_statement | investment_statement",
+  "document_type": "pay_stub | bank_statement | investment_statement | receipt",
   "fields": { ... }
 }
 
@@ -32,7 +33,8 @@ bank_statement
 {
   "bank_name": "string",
   "account_number": "string",
-  "balance": "number"
+  "opening_balance": "number",
+  "closing_balance": "number"
 }
 
 investment_statement
@@ -45,6 +47,40 @@ investment_statement
 
 Field aliases for investment_statement (look for these alternative names):
 - customer_name: "investor name", "account holder", "account owner", "investor", "name"
+
+receipt
+{
+  "merchant_name": "string",
+  "transaction_date": "string",
+  "currency": "string",
+  "total_amount": "number",
+  "tax_amount": "number",
+  "receipt_number": "string",
+  "payment_method": "string",
+  "items": [
+    {
+      "description": "string (item name/description)",
+      "quantity": "number",
+      "unit_price": "number",
+      "line_total": "number"
+    }
+  ]
+}
+
+Field aliases for receipt (look for these alternative names):
+- merchant_name: "store name", "retailer", "shop", "vendor", "business name"
+- transaction_date: "date", "purchase date", "sale date"
+- total_amount: "total", "grand total", "amount due", "balance"
+- tax_amount: "tax", "VAT", "GST", "sales tax"
+- receipt_number: "receipt no", "transaction id", "invoice number", "order number"
+- payment_method: "payment type", "card type", "method of payment"
+- items: extract ALL line items from the receipt with their details
+
+Important for items field:
+- Extract EVERY product/item listed on the receipt
+- Each item should have description, quantity, unit_price, and line_total
+- If quantity is not shown, assume 1
+- If individual fields are unclear, set them to null but always include the description
 
 Rules:
 - Use exact field names as specified

@@ -1,6 +1,7 @@
 import argparse
 import json
 from pathlib import Path
+from typing import Optional
 
 from .config import get_openai_settings
 from .llm_extract import extract_key_values
@@ -91,18 +92,63 @@ def _format_markdown_value(value: object) -> str:
     return text.replace("|", "\\|").replace("\n", "<br>")
 
 
-def format_markdown(result: dict) -> str:
+def format_markdown(result: dict, ocr_details: list[dict] = None) -> str:
+    """Format extraction result as markdown with optional OCR confidence scores.
+    
+    Args:
+        result: The extraction result dictionary
+        ocr_details: Optional OCR details with confidence scores
+    """
     document_type = result.get("document_type", "")
     fields = result.get("fields", {})
 
-    lines = ["# Document Extraction", "", f"- document_type: {_format_markdown_value(document_type)}", "", "## Fields", "", "| key | value |", "| --- | --- |"]
-
-    if isinstance(fields, dict):
-        for key, value in fields.items():
-            lines.append(f"| {key} | {_format_markdown_value(value)} |")
+    lines = ["# Document Extraction", "", f"- document_type: {_format_markdown_value(document_type)}", "", "## Fields"]
+    
+    # If OCR details available, show confidence scores
+    if ocr_details:
+        lines.extend(["", "| key | value | confidence |", "| --- | --- | --- |"])
+        
+        if isinstance(fields, dict):
+            for key, value in fields.items():
+                # Find best matching OCR detection for this field value
+                confidence = _find_confidence_for_value(value, ocr_details)
+                conf_str = f"{confidence:.3f}" if confidence is not None else "—"
+                lines.append(f"| {key} | {_format_markdown_value(value)} | {conf_str} |")
+    else:
+        lines.extend(["", "| key | value |", "| --- | --- |"])
+        
+        if isinstance(fields, dict):
+            for key, value in fields.items():
+                lines.append(f"| {key} | {_format_markdown_value(value)} |")
 
     lines.append("")
     return "\n".join(lines)
+
+
+def _find_confidence_for_value(value: object, ocr_details: list[dict]) -> float:
+    """Find the highest confidence score for OCR text that matches the extracted value."""
+    if value is None or not ocr_details:
+        return None
+    
+    value_str = str(value).lower().strip()
+    if not value_str:
+        return None
+    
+    best_confidence = None
+    
+    for detail in ocr_details:
+        ocr_text = detail['text'].lower().strip()
+        
+        # Exact match
+        if ocr_text == value_str:
+            if best_confidence is None or detail['confidence'] > best_confidence:
+                best_confidence = detail['confidence']
+        # Partial match (OCR text contains the value)
+        elif value_str in ocr_text or ocr_text in value_str:
+            if best_confidence is None or detail['confidence'] > best_confidence:
+                best_confidence = detail['confidence']
+    
+    return best_confidence
 
 
 def main() -> None:

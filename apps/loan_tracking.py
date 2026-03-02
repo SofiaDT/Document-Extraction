@@ -43,10 +43,13 @@ def log_application(
     qualification: str,
     extraction_confidence: Dict[str, float],
     processing_time: float,
-    notes: Optional[str] = None
+    notes: Optional[str] = None,
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+    cost_usd: float = 0.0
 ) -> str:
     """
-    Log a loan application review.
+    Log a loan application review with cost tracking.
     
     Returns:
         Application ID
@@ -64,6 +67,56 @@ def log_application(
         "metrics": metrics,
         "qualification": qualification,
         "extraction_confidence": extraction_confidence,
+        "processing_time_seconds": processing_time,
+        "notes": notes,
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "cost_usd": round(cost_usd, 6)
+    }
+    
+    applications.append(application)
+    save_applications(applications)
+    
+    return app_id
+
+
+def log_failed_application(
+    applicant_name: str,
+    username: str,
+    failure_reason: str,
+    documents: Optional[Dict[str, str]] = None,
+    extraction_confidence: Optional[Dict[str, float]] = None,
+    processing_time: float = 0.0,
+    notes: Optional[str] = None
+) -> str:
+    """
+    Log a failed application review.
+    
+    Args:
+        applicant_name: Name of the applicant
+        username: User who reviewed the application
+        failure_reason: Reason for failure (e.g., "missing_data", "other")
+        documents: Extracted document paths (if any)
+        extraction_confidence: Confidence scores (if any)
+        processing_time: Time spent before failure
+        notes: Additional notes about the failure
+    
+    Returns:
+        Application ID
+    """
+    applications = load_applications()
+    
+    app_id = f"APP-{datetime.now().strftime('%Y%m%d-%H%M%S')}-FAILED-{len(applications) + 1}"
+    
+    application = {
+        "application_id": app_id,
+        "timestamp": datetime.now().isoformat(),
+        "applicant_name": applicant_name,
+        "reviewed_by": username,
+        "status": "failed",
+        "failure_reason": failure_reason,
+        "documents": documents or {},
+        "extraction_confidence": extraction_confidence or {},
         "processing_time_seconds": processing_time,
         "notes": notes
     }
@@ -192,3 +245,65 @@ def get_quality_issues() -> List[Dict[str, Any]]:
             })
     
     return issues
+
+
+def get_total_cost() -> float:
+    """Get total spend across all applications."""
+    applications = load_applications()
+    return sum(app.get("cost_usd", 0) for app in applications)
+
+
+def get_monthly_cost(year: int, month: int) -> float:
+    """Get spend for a specific month."""
+    applications = load_applications()
+    monthly_cost = 0
+    for app in applications:
+        try:
+            ts = datetime.fromisoformat(app.get("timestamp", ""))
+            if ts.year == year and ts.month == month:
+                monthly_cost += app.get("cost_usd", 0)
+        except Exception:
+            pass
+    return round(monthly_cost, 2)
+
+
+def get_cost_metrics() -> Dict[str, float]:
+    """Get cost aggregations and per-unit metrics."""
+    applications = load_applications()
+    
+    if not applications:
+        return {
+            "total_cost": 0.0,
+            "total_tokens": 0,
+            "avg_cost_per_app": 0.0,
+            "approvals": 0,
+            "cost_per_approval": 0.0,
+            "total_hours_saved": 0.0,
+        }
+    
+    total_cost = sum(app.get("cost_usd", 0) for app in applications)
+    total_input_tokens = sum(app.get("input_tokens", 0) for app in applications)
+    total_output_tokens = sum(app.get("output_tokens", 0) for app in applications)
+    total_tokens = total_input_tokens + total_output_tokens
+    
+    # Count approvals (Likely to Qualify or Conditional)
+    approvals = sum(1 for app in applications if app.get("qualification") in 
+                   ["Likely to Qualify", "Conditional Approval"])
+    
+    # Calculate hours saved (15 min baseline per app)
+    total_hours_saved = sum(
+        max(0, (15 - (app.get("processing_time_seconds", 0) / 60)) / 60)
+        for app in applications
+    )
+    
+    return {
+        "total_cost": round(total_cost, 2),
+        "total_tokens": total_tokens,
+        "total_input_tokens": total_input_tokens,
+        "total_output_tokens": total_output_tokens,
+        "avg_cost_per_app": round(total_cost / len(applications), 4) if applications else 0,
+        "approvals": approvals,
+        "cost_per_approval": round(total_cost / approvals, 4) if approvals > 0 else 0,
+        "total_hours_saved": round(total_hours_saved, 1),
+    }
+

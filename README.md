@@ -98,11 +98,18 @@ streamlit run apps/loan_checker.py
   3. **Liquidity vs Payment** - Liquid Assets / Monthly Payment
 - Get overall qualification assessment (Likely to Qualify / Conditional Approval / High Risk)
 - **Review & Approve**: Manually review metrics before saving to dashboard
-- **Automatic Tracking**: All approved applications are logged for dashboard analytics
-- **Audit Logging**: All user actions (login, logout, approvals) are recorded for compliance
+- **Start Over - Failed Application Tracking**: When clicking "Start Over", you'll be prompted to select a failure reason:
+  - Missing data or documents
+  - Invalid or inconsistent data
+  - Insufficient income/funds
+  - Poor document quality
+  - Other reason
+  - The failed application is automatically logged with your selected reason for analysis
+- **Automatic Tracking**: All approved and failed applications are logged for dashboard analytics
+- **Audit Logging**: All user actions (login, logout, approvals, failures) are recorded for compliance
 - **PII Protection**: Personal information is redacted in audit trails
 
-**Note:** Loan application data is stored in `data/output/loan_applications.json` alongside extracted documents. Audit logs are stored in `data/output/audit_log.json`.
+**Note:** Loan application data (both approved and failed) is stored in `data/output/loan_applications.json` alongside extracted documents. Audit logs are stored in `data/output/audit_log.json`.
 
 **Security Features:**
 - Session-based authentication with configurable timeout
@@ -198,6 +205,145 @@ streamlit run apps/rag_search.py
 For programmatic usage examples, see:
 - [examples/example_rag_usage.py](examples/example_rag_usage.py) - Search patterns and filtering
 
+## Cost & Efficiency Tracking
+
+The loan processing system tracks AI infrastructure costs and calculates efficiency metrics to optimize spending and measure ROI.
+
+### Dashboard Cost Metrics
+
+The **Loan Processing Dashboard** includes a dedicated **Cost & Efficiency Metrics** section that displays:
+
+#### Real-Time Cost Tracking
+- **Total Spend**: Cumulative cost across all processed applications
+- **Monthly Spend**: Current month's AI infrastructure costs
+- **Spend Alerts**: Red warning flag if monthly spend exceeds budget threshold ($100)
+
+#### Efficiency Metrics
+- **Cost Per Approval**: Average cost to approve each application
+- **Hours Saved**: Total hours saved vs. manual document review (assumes 30 min manual review)
+- **Cost Per Hour Saved**: Efficiency metric showing cost to save one hour of manual labor
+- **Estimated ROI**: Return on investment assuming $50/hour labor cost
+
+#### Cost Analysis Charts
+1. **Daily Cost Trend**: Line chart showing cost evolution over time
+2. **Daily Token Usage**: Bar chart tracking API token consumption
+3. **Cost by Qualification**: Box plot comparing costs across different approval outcomes
+4. **Processing Time vs Cost**: Scatter plot with trend line showing latency correlation
+
+### How Costs Are Calculated
+
+#### Token Counting
+The system uses `tiktoken` library to count tokens for:
+- **Input**: Extracted text from documents + prompt overhead
+- **Output**: LLM structured extraction response
+
+```python
+from cost_tracking import count_tokens, estimate_cost
+
+# Count tokens from extracted document text
+input_tokens = count_tokens("John Doe earned $5,000...", "gpt-4")
+
+# Estimate cost (GPT-4: $0.03/1K input, $0.06/1K output)
+cost = estimate_cost(input_tokens=500, output_tokens=200, model="gpt-4")
+print(f"Total cost: ${cost['total_cost']:.4f}")
+```
+
+#### Supported Models & Pricing
+- **gpt-4**: $0.03 per 1K input tokens, $0.06 per 1K output tokens
+- **gpt-4-turbo**: $0.01 per 1K input tokens, $0.03 per 1K output tokens  
+- **gpt-3.5-turbo**: $0.0005 per 1K input tokens, $0.0015 per 1K output tokens
+
+#### Hours Saved Calculation
+```
+Hours Saved = (Manual Review Time - Processing Time) / 3600 seconds
+            = (30 minutes - actual processing seconds) / 3600
+```
+
+For example:
+- Manual document review: 30 minutes per application
+- Actual processing: 45 seconds
+- Hours saved: (30*60 - 45) / 3600 = **0.49 hours**
+
+### Cost Tracking in Loan Checker
+
+When you approve an application in the **Loan Checker** app:
+
+1. **Token counting**: System counts tokens from all extracted text and structured data
+2. **Cost estimation**: Calculates cost using OpenAI pricing for GPT-4
+3. **Application logging**: Saves application with cost data to `data/output/loan_applications.json`
+
+Example logged record:
+```json
+{
+  "application_id": "APP-20260302-145101-1",
+  "timestamp": "2026-03-02T14:51:01.000000",
+  "applicant_name": "John Doe",
+  "input_tokens": 512,
+  "output_tokens": 287,
+  "cost_usd": 0.02295,
+  "processing_time_seconds": 3.2,
+  "qualification": "Likely to Qualify"
+}
+```
+
+### Cost Metrics API
+
+Use the cost tracking module programmatically:
+
+```python
+from cost_tracking import (
+    count_tokens,
+    estimate_cost,
+    calculate_hours_saved,
+    get_cost_per_approval,
+    get_cost_per_hour_saved
+)
+from loan_tracking import get_cost_metrics
+
+# Get comprehensive cost statistics
+metrics = get_cost_metrics()
+print(f"Total cost: ${metrics['total_cost']:.2f}")
+print(f"Total tokens: {metrics['total_tokens']}")
+print(f"Total approvals: {metrics['approvals']}")
+print(f"Cost per approval: ${metrics['cost_per_approval']:.2f}")
+print(f"Hours saved: {metrics['total_hours_saved']:.1f}h")
+print(f"Cost per hour saved: ${metrics['cost_per_hour_saved']:.2f}")
+```
+
+### Optimization Tips
+
+1. **Reduce Token Usage**
+   - Use templates to extract only necessary fields
+   - Pre-process documents to remove irrelevant pages
+   - Consider GPT-3.5-turbo for simple extractions (90% cheaper)
+
+2. **Batch Processing**
+   - Process multiple applications together during off-peak hours
+   - Implement job queues to manage API rate limits
+
+3. **Quality vs Cost Tradeoff**
+   - Monitor confidence scores alongside costs
+   - Higher confidence documents may need fewer retries
+
+4. **Monitor Spend**
+   - Dashboard alerts warn when monthly spend exceeds budget
+   - Export CSV reports for cost analysis and forecasting
+
+### Testing Cost Tracking
+
+Run the cost tracking test suite:
+
+```bash
+python test_cost_tracking.py
+```
+
+This validates:
+- Token counting accuracy
+- Cost estimation calculations
+- Hours saved metrics
+- Cost aggregation functions
+- Dashboard metric retrieval
+
 ## Data Security & Privacy
 
 This system includes built-in security features for protecting sensitive financial and personal information:
@@ -290,6 +436,7 @@ data = decrypt_file(Path("data/output/loan_applications.json"))
 5. **Backup Strategy**: Regular encrypted backups with off-site storage
 6. **Security Updates**: Keep dependencies updated (`pip list --outdated`)
 7. **Monitoring**: Log all critical events and set up alerts for suspicious activity
+8. **Cost Monitoring**: Set monthly spend budgets and investigate unusual spikes
 
 
 

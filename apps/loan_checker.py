@@ -18,8 +18,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "Document_Extraction"))
 from src.config import get_openai_settings
 from src.main import extract_document_text
 from src.llm_extract import extract_key_values
-from loan_tracking import log_application
+from loan_tracking import log_application, log_failed_application
 from audit_log import log_audit_event, redact_pii
+from cost_tracking import count_tokens, estimate_cost
 
 # Load environment
 load_dotenv()
@@ -68,7 +69,7 @@ def check_session_timeout(timeout_seconds: int = 1800) -> bool:
 
 # Login UI
 if not st.session_state.logged_in:
-    st.title("🔐 Loan Checker Login")
+    st.title("Loan Checker Login")
     col1, col2, col3 = st.columns([1, 2, 1])
     
     with col2:
@@ -87,7 +88,7 @@ if not st.session_state.logged_in:
                 st.rerun()
             else:
                 log_audit_event(username, "login_failed", resource="loan_checker", status="failure")
-                st.error("❌ Invalid username or password")
+                st.error("Invalid username or password")
         
         st.divider()
         st.caption("Demo credentials: admin / admin123 or demo / demo123")
@@ -95,20 +96,20 @@ if not st.session_state.logged_in:
 
 # Check for session timeout
 if not check_session_timeout():
-    st.error("⏱️ Session expired. Please log in again.")
+    st.error("Session expired. Please log in again.")
     st.stop()
 
 # Logged in view
 with st.sidebar:
-    st.write(f"👤 Welcome, **{st.session_state.name}**")
-    if st.button("🚪 Logout", use_container_width=True):
+    st.write(f"Welcome, **{st.session_state.name}**")
+    if st.button("Logout", use_container_width=True):
         log_audit_event(st.session_state.username, "logout", resource="loan_checker")
         st.session_state.logged_in = False
         st.session_state.username = None
         st.session_state.name = None
         st.rerun()
 
-st.title("💰 Loan Qualification Checker")
+st.title("Loan Qualification Checker")
 st.write("Upload your financial documents to assess loan eligibility.")
 
 # Initialize session state
@@ -136,6 +137,9 @@ if "approval_ready" not in st.session_state:
 
 if "approval_data" not in st.session_state:
     st.session_state.approval_data = None
+
+if "show_failure_form" not in st.session_state:
+    st.session_state.show_failure_form = False
 
 # Document upload section
 st.header("1. Upload Documents")
@@ -594,18 +598,36 @@ else:
         
         # Approval button section
         st.header("5. Review & Approve")
-        st.info("👉 Review the metrics above. Click **Approve** to save this application to the dashboard, or upload new documents to start over.")
+        st.info("Review the metrics above. Click Approve to save this application to the dashboard, or upload new documents to start over.")
         
         col1, col2, col3 = st.columns([1, 1, 2])
         
         with col1:
-            if st.button("✅ Approve & Log", type="primary", use_container_width=True):
+            if st.button("Approve & Log", type="primary", use_container_width=True):
                 try:
                     data = st.session_state.approval_data
                     
                     # Redact PII from notes for audit trail
                     redacted_applicant = redact_pii(data["applicant_name"])
                     redacted_notes = data["notes"].replace(data["applicant_name"], redacted_applicant)
+                    
+                    # Calculate token usage and cost
+                    # Count tokens for all extracted text and document data
+                    total_input_tokens = 0
+                    total_output_tokens = 0
+                    
+                    for doc_type in ["pay_stub", "bank_statement", "investment_statement"]:
+                        doc_meta = metadata.get(doc_type, {})
+                        if doc_meta.get("success"):
+                            # Estimate input tokens from document content
+                            total_input_tokens += count_tokens(redacted_notes, "gpt-4")
+                    
+                    # Estimate output tokens from extracted data (roughly 50-100 tokens per doc)
+                    total_output_tokens = 300  # Conservative estimate for 3 documents + metrics
+                    
+                    # Calculate cost
+                    cost_data = estimate_cost(total_input_tokens, total_output_tokens, "gpt-4")
+                    total_cost = cost_data["total_cost"]
                     
                     app_id = log_application(
                         applicant_name=data["applicant_name"],
@@ -615,7 +637,10 @@ else:
                         qualification=data["qualification"],
                         extraction_confidence=data["extraction_confidence"],
                         processing_time=data["processing_time"],
-                        notes=redacted_notes
+                        notes=redacted_notes,
+                        input_tokens=total_input_tokens,
+                        output_tokens=total_output_tokens,
+                        cost_usd=total_cost
                     )
                     
                     # Log audit event
@@ -630,22 +655,91 @@ else:
                     )
                     
                     st.session_state.application_logged = True
-                    st.success(f"✓ Application logged: {app_id}")
-                    st.info(f"📊 View in Loan Dashboard | Processing time: {data['processing_time']:.1f}s")
+                    st.success(f"Application logged: {app_id}")
+                    st.info(f"View in Loan Dashboard | Processing time: {data['processing_time']:.1f}s")
                     
                 except Exception as log_error:
                     st.error(f"Error logging application: {log_error}")
         
         with col2:
-            if st.button("🔄 Start Over", use_container_width=True):
-                st.session_state.extracted_data = {
-                    "pay_stub": None,
-                    "bank_statement": None,
-                    "investment_statement": None
-                }
-                st.session_state.approval_ready = False
-                st.session_state.approval_data = None
-                st.rerun()
+            if st.button("Start Over", use_container_width=True):
+                st.session_state.show_failure_form = True
+        
+        # Failure reason dialog
+        if st.session_state.get("show_failure_form", False):
+            st.divider()
+            st.warning("Why are you starting over? Please select the reason below so we can track failed applications.")
+            
+            failure_reason = st.radio(
+                "Reason for not approving:",
+                options=["missing_data", "invalid_data", "insufficient_funds", "document_quality", "other"],
+                format_func=lambda x: {
+                    "missing_data": "Missing data or documents",
+                    "invalid_data": "Invalid or inconsistent data",
+                    "insufficient_funds": "Insufficient income/funds",
+                    "document_quality": "Poor document quality",
+                    "other": "Other reason"
+                }.get(x, x),
+                key="failure_reason_select"
+            )
+            
+            additional_notes = st.text_area(
+                "Additional notes (optional):",
+                placeholder="Describe what went wrong...",
+                key="failure_notes"
+            )
+            
+            col_save, col_cancel = st.columns(2)
+            
+            with col_save:
+                if st.button("Log Failure & Start Over", type="secondary", use_container_width=True):
+                    try:
+                        data = st.session_state.approval_data
+                        
+                        # Log the failed application
+                        failed_app_id = log_failed_application(
+                            applicant_name=data.get("applicant_name", "Unknown"),
+                            username=st.session_state.username,
+                            failure_reason=failure_reason,
+                            documents=data.get("documents", {}),
+                            extraction_confidence=data.get("extraction_confidence", {}),
+                            processing_time=data.get("processing_time", 0),
+                            notes=additional_notes if additional_notes else None
+                        )
+                        
+                        # Log audit event
+                        redacted_applicant = redact_pii(data.get("applicant_name", "Unknown"))
+                        log_audit_event(
+                            st.session_state.username,
+                            "failed_application",
+                            resource=failed_app_id,
+                            details={
+                                "failure_reason": failure_reason,
+                                "applicant_partial": redacted_applicant
+                            }
+                        )
+                        
+                        # Clear form and reset
+                        st.session_state.extracted_data = {
+                            "pay_stub": None,
+                            "bank_statement": None,
+                            "investment_statement": None
+                        }
+                        st.session_state.approval_ready = False
+                        st.session_state.approval_data = None
+                        st.session_state.show_failure_form = False
+                        
+                        st.success(f"✓ Failed application logged: {failed_app_id}")
+                        st.info("Ready to process new applications.")
+                        time.sleep(2)
+                        st.rerun()
+                    except Exception as fail_error:
+                        st.error(f"Error logging failed application: {fail_error}")
+            
+            with col_cancel:
+                if st.button("Cancel", use_container_width=True):
+                    st.session_state.show_failure_form = False
+                    st.rerun()
         
     except Exception as e:
         st.error(f"Error calculating metrics: {e}")

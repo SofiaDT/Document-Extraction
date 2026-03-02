@@ -1,5 +1,7 @@
 Play_notebooks/
 .env
+config.yaml
+apps/config.yaml
 
 # Python artifacts
 __pycache__/
@@ -28,6 +30,12 @@ venv/
 data/input/*
 data/output/*
 data/vectorstore/
+
+# Sensitive files - NEVER commit
+data/output/.encryption_key
+data/output/loan_applications.json
+data/output/audit_log.json
+data/output/*_backup.json
 
 # Generated indexes (regeneratable)
 faiss_index/

@@ -11,8 +11,8 @@ from rag_indexing.vectordb_client import build_vectorstore
 # Load environment variables from .env
 load_dotenv()
 
-
-OUTPUT_DIR = Path("data/output")
+# Use paths relative to project root
+OUTPUT_DIR = Path(__file__).parent.parent.parent / "data/output"
 
 
 def load_json_files(files: Optional[List[Path]] = None):

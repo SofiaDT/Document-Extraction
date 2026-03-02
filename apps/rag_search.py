@@ -2,31 +2,119 @@
 
 from pathlib import Path
 import os
+import sys
+import time
 
 import streamlit as st
+import yaml
 from dotenv import load_dotenv
 from langchain_community.vectorstores import FAISS
 from langchain_openai import OpenAIEmbeddings
 from openai import OpenAI
 
+# Add RAG directory to path
+sys.path.insert(0, str(Path(__file__).parent.parent / "RAG"))
+
 from rag_indexing import build_index
+from audit_log import log_audit_event
 
 load_dotenv()
 
 st.set_page_config(page_title="RAG Search", layout="wide")
+
+# Authentication
+with open(Path(__file__).parent / 'config.yaml') as file:
+    config = yaml.safe_load(file)
+
+if 'logged_in' not in st.session_state:
+    st.session_state.logged_in = False
+    st.session_state.username = None
+    st.session_state.name = None
+    st.session_state.login_time = None
+
+def check_credentials(username, password):
+    """Check if credentials are valid"""
+    if username in config['credentials']['usernames']:
+        stored_password = config['credentials']['usernames'][username]['password']
+        if stored_password == password:
+            return True, config['credentials']['usernames'][username]['name']
+    return False, None
+
+
+def check_session_timeout(timeout_seconds: int = 1800) -> bool:
+    """
+    Check if session has timed out (default 30 minutes).
+    Returns True if session is still valid, False if expired.
+    """
+    if not st.session_state.logged_in or not st.session_state.login_time:
+        return True
+    
+    elapsed = time.time() - st.session_state.login_time
+    
+    if elapsed > timeout_seconds:
+        st.session_state.logged_in = False
+        st.session_state.login_time = None
+        return False
+    
+    return True
+
+
+# Login UI
+if not st.session_state.logged_in:
+    st.title("🔐 RAG Search Login")
+    col1, col2, col3 = st.columns([1, 2, 1])
+    
+    with col2:
+        st.subheader("Please log in")
+        username = st.text_input("Username", key="username_input")
+        password = st.text_input("Password", type="password", key="password_input")
+        
+        if st.button("Login", use_container_width=True, type="primary"):
+            valid, user_name = check_credentials(username, password)
+            if valid:
+                st.session_state.logged_in = True
+                st.session_state.username = username
+                st.session_state.name = user_name
+                st.session_state.login_time = time.time()
+                log_audit_event(username, "login", resource="rag_search")
+                st.rerun()
+            else:
+                log_audit_event(username, "login_failed", resource="rag_search", status="failure")
+                st.error("❌ Invalid username or password")
+        
+        st.divider()
+        st.caption("Demo credentials: admin / admin123 or demo / demo123")
+    st.stop()
+
+# Check for session timeout
+if not check_session_timeout():
+    st.error("⏱️ Session expired. Please log in again.")
+    st.stop()
+
 st.title("Document Search & Chat")
 
-# Use paths relative to RAG directory
-index_path = Path(__file__).parent.parent / "faiss_index"
-output_dir = Path(__file__).parent.parent / "data/output"
+index_path = Path("../faiss_index")
+output_dir = Path("../data/output")
 
 
 def index_exists() -> bool:
     return index_path.exists() and (index_path / "index.faiss").exists()
 
 
-# Sidebar: Indexing
+# Sidebar: User & Indexing
 with st.sidebar:
+    # User section
+    st.write(f"👤 Welcome, **{st.session_state.name}**")
+    if st.button("🚪 Logout", use_container_width=True):
+        log_audit_event(st.session_state.username, "logout", resource="rag_search")
+        st.session_state.logged_in = False
+        st.session_state.username = None
+        st.session_state.name = None
+        st.rerun()
+    
+    st.divider()
+    
+    # Indexing section
     st.header("Indexing")
     
     available_files = sorted(output_dir.glob("*.json")) if output_dir.exists() else []
@@ -50,7 +138,7 @@ with st.sidebar:
                 except Exception as e:
                     st.error(f"Error: {e}")
     else:
-        st.info("No JSON files in data/output/")
+        st.info("No JSON files in ../data/output/")
     
     st.divider()
     status = "✓ Ready" if index_exists() else "✗ Missing"

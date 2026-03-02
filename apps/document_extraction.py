@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 import sys
+import hashlib
+import time
 
 import streamlit as st
 import pymupdf
@@ -8,12 +10,14 @@ import numpy as np
 from PIL import Image
 import cv2
 import easyocr
+import yaml
 
-sys.path.insert(0, str(Path(__file__).parent / "Document_Extraction"))
+sys.path.insert(0, str(Path(__file__).parent.parent / "Document_Extraction"))
 
 from src.config import get_openai_settings
 from src.llm_extract import extract_key_values
 from src.main import extract_document_text, format_markdown
+from audit_log import log_audit_event
 
 SUPPORTED_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg"}
 
@@ -94,6 +98,148 @@ def list_supported_files(directory: Path) -> list[Path]:
     )
 
 
+def load_extracted_documents(output_dir: Path) -> dict:
+    """Load all extracted markdown documents from output directory."""
+    documents = {}
+    output_path = Path(output_dir)
+    
+    if not output_path.exists():
+        return documents
+    
+    # Load markdown files for full text content
+    for md_file in output_path.glob("*.md"):
+        try:
+            with open(md_file, 'r', encoding='utf-8') as f:
+                documents[md_file.stem] = f.read()
+        except Exception as e:
+            st.warning(f"Could not load {md_file.name}: {e}")
+    
+    return documents
+
+
+def chunk_documents(documents: dict, chunk_size: int = 500) -> list[dict]:
+    """Split documents into chunks for semantic search."""
+    chunks = []
+    
+    for doc_name, content in documents.items():
+        # Split by paragraphs first, then by characters if needed
+        paragraphs = content.split('\n\n')
+        current_chunk = ""
+        
+        for para in paragraphs:
+            if len(current_chunk) + len(para) < chunk_size:
+                current_chunk += para + "\n\n"
+            else:
+                if current_chunk:
+                    chunks.append({
+                        "text": current_chunk.strip(),
+                        "source": doc_name
+                    })
+                current_chunk = para + "\n\n"
+        
+        if current_chunk:
+            chunks.append({
+                "text": current_chunk.strip(),
+                "source": doc_name
+            })
+    
+    return chunks
+
+
+def calculate_similarity(query: str, text: str) -> float:
+    """Simple keyword-based similarity scoring."""
+    query_words = set(query.lower().split())
+    text_words = set(text.lower().split())
+    
+    # Remove common stop words
+    stop_words = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'is', 'was', 'are', 'be'}
+    query_words = query_words - stop_words
+    text_words = text_words - stop_words
+    
+    if not query_words:
+        return 0.0
+    
+    # Calculate overlap
+    overlap = len(query_words & text_words)
+    return overlap / len(query_words)
+
+
+def search_relevant_chunks(documents: dict, query: str, top_k: int = 3) -> tuple[str, list[str]]:
+    """Search for relevant document chunks using keyword similarity."""
+    chunks = chunk_documents(documents, chunk_size=500)
+    
+    if not chunks:
+        return "", []
+    
+    # Score all chunks
+    scored_chunks = []
+    for chunk in chunks:
+        score = calculate_similarity(query, chunk["text"])
+        if score > 0:  # Only include chunks with some match
+            scored_chunks.append((score, chunk))
+    
+    # If no keyword matches, include all chunks
+    if not scored_chunks:
+        scored_chunks = [(0, chunk) for chunk in chunks]
+    
+    # Sort by score and get top K
+    scored_chunks.sort(reverse=True, key=lambda x: x[0])
+    top_chunks = scored_chunks[:top_k]
+    
+    # Build context from relevant chunks
+    context = "Relevant documents found:\n\n"
+    sources = set()
+    
+    for score, chunk in top_chunks:
+        context += f"--- From {chunk['source']} (relevance: {score:.2f}) ---\n"
+        context += chunk["text"] + "\n\n"
+        sources.add(chunk['source'])
+    
+    return context, list(sources)
+
+
+def query_documents_with_llm(api_key: str, model: str, documents: dict, query: str) -> tuple[str, list[str]]:
+    """Query extracted documents using LLM with RAG-style chunk retrieval."""
+    if not documents:
+        return "No extracted documents found. Please extract documents first.", []
+    
+    # Search for relevant chunks instead of using all documents
+    context, sources = search_relevant_chunks(documents, query, top_k=5)
+    
+    if not context:
+        return "No relevant information found in documents.", []
+    
+    # Create the prompt for the LLM
+    system_prompt = """You are a helpful assistant that answers questions based on extracted document information. 
+    Answer questions using only the information provided in the document chunks below.
+    If information is not available in the documents, say so clearly.
+    Be concise and specific in your answers. Cite which document you found the information in."""
+    
+    user_message = f"""{context}
+
+Based on the above extracted document information, please answer this question:
+{query}"""
+    
+    try:
+        from openai import OpenAI
+        client = OpenAI(api_key=api_key)
+        
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_message}
+            ],
+            temperature=0.7,
+            max_tokens=1000
+        )
+        
+        answer = response.choices[0].message.content
+        return answer, sources
+    except Exception as e:
+        return f"Error querying documents: {str(e)}", []
+
+
 def save_outputs(output_dir: Path, input_path: Path, result: dict, markdown: str) -> tuple[Path, Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
     json_path = output_dir / f"{input_path.name}.json"
@@ -105,8 +251,89 @@ def save_outputs(output_dir: Path, input_path: Path, result: dict, markdown: str
 
 st.set_page_config(page_title="Document Extraction", layout="wide")
 
-st.title("Document Extraction App")
-st.write("Batch-extract documents with OCR + LLM and review JSON/Markdown outputs.")
+# Load authentication config
+with open('config.yaml') as file:
+    config = yaml.safe_load(file)
+
+# Initialize session state
+if 'logged_in' not in st.session_state:
+    st.session_state.logged_in = False
+    st.session_state.username = None
+    st.session_state.name = None
+    st.session_state.login_time = None
+
+def hash_password(password):
+    """Simple password hashing for verification"""
+    return hashlib.sha256(password.encode()).hexdigest()
+
+def check_credentials(username, password):
+    """Check if credentials are valid"""
+    if username in config['credentials']['usernames']:
+        stored_password = config['credentials']['usernames'][username]['password']
+        if stored_password == password:  # In production, use hashed passwords
+            return True, config['credentials']['usernames'][username]['name']
+    return False, None
+
+
+def check_session_timeout(timeout_seconds: int = 1800) -> bool:
+    """
+    Check if session has timed out (default 30 minutes).
+    Returns True if session is still valid, False if expired.
+    """
+    if not st.session_state.logged_in or not st.session_state.login_time:
+        return True
+    
+    elapsed = time.time() - st.session_state.login_time
+    
+    if elapsed > timeout_seconds:
+        st.session_state.logged_in = False
+        st.session_state.login_time = None
+        return False
+    
+    return True
+
+
+# Login UI - show if not logged in
+if not st.session_state.logged_in:
+    st.title("🔐 Document Extraction Login")
+    col1, col2, col3 = st.columns([1, 2, 1])
+    
+    with col2:
+        st.subheader("Please log in")
+        username = st.text_input("Username", key="username_input")
+        password = st.text_input("Password", type="password", key="password_input")
+        
+        if st.button("Login", use_container_width=True, type="primary"):
+            valid, user_name = check_credentials(username, password)
+            if valid:
+                st.session_state.logged_in = True
+                st.session_state.username = username
+                st.session_state.name = user_name
+                st.session_state.login_time = time.time()
+                log_audit_event(username, "login", resource="document_extraction")
+                st.rerun()
+            else:
+                log_audit_event(username, "login_failed", resource="document_extraction", status="failure")
+                st.error("❌ Invalid username or password")
+        
+        st.divider()
+        st.caption("Demo credentials: admin / admin123 or demo / demo123")
+    st.stop()
+
+# Check for session timeout
+if not check_session_timeout():
+    st.error("⏱️ Session expired. Please log in again.")
+    st.stop()
+
+# Logout button in sidebar (only shows when logged in)
+with st.sidebar:
+    st.write(f"👤 Welcome, **{st.session_state.name}**")
+    if st.button("🚪 Logout", use_container_width=True):
+        log_audit_event(st.session_state.username, "logout", resource="document_extraction")
+        st.session_state.logged_in = False
+        st.session_state.username = None
+        st.session_state.name = None
+        st.rerun()
 
 if st.button("Reset"):
     for key in ["results", "errors", "last_directory"]:
@@ -115,7 +342,7 @@ if st.button("Reset"):
 
 st.header("Document Selection")
 
-default_directory = st.session_state.get("last_directory", "data/input")
+default_directory = st.session_state.get("last_directory", "../data/input")
 directory_input = st.text_input("Documents directory path", value=default_directory)
 use_schema = st.checkbox(
     "Use schema (pay_stub, bank_statement, investment_statement, receipt)",
@@ -143,7 +370,7 @@ if directory_input:
                 st.session_state["results"] = []
                 st.session_state["errors"] = []
 
-                output_dir = Path("data/output")
+                output_dir = Path("../data/output")
                 progress = st.progress(0.0)
 
                 for index, path in enumerate(files, start=1):
@@ -270,3 +497,38 @@ else:
                         st.image(item["ocr_viz"], caption="OCR Bounding Boxes", use_container_width=True)
                     else:
                         st.info("OCR visualization not available for this document")
+
+
+# Chat Interface to Query Documents
+st.divider()
+st.header("💬 Chat with Your Documents")
+st.write("Ask questions about extracted document information")
+
+output_dir = Path("../data/output")
+extracted_docs = load_extracted_documents(output_dir)
+
+col1, col2 = st.columns([3, 1])
+
+with col1:
+    user_query = st.text_input("Ask a question about your documents:", placeholder="e.g., What is the total income across all documents?")
+
+with col2:
+    search_button = st.button("🔍 Search", use_container_width=True)
+
+if search_button and user_query:
+    try:
+        api_key, model = get_openai_settings()
+        answer, doc_sources = query_documents_with_llm(api_key, model, extracted_docs, user_query)
+        
+        st.info(f"**Question:** {user_query}")
+        st.write(answer)
+        
+        if doc_sources:
+            with st.expander("📄 Documents Referenced"):
+                for doc in doc_sources:
+                    st.write(f"- {doc}")
+    
+    except RuntimeError as exc:
+        st.error(f"Configuration error: {str(exc)}")
+    except Exception as exc:
+        st.error(f"Error: {str(exc)}")
